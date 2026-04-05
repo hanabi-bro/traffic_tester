@@ -1,3 +1,0 @@
-datetime,event_type,proto,server_ip,server_port,client_ip,client_port,elapsed_sec,bytes_sent,bytes_recv,bps_sent,bps_recv,message
-2026-04-05 15:36:54.856,CONNECT,TCP,127.0.0.1,5050,127.0.0.1,7318,0.000,0,0,0,0,Client connected from 127.0.0.1:7318
-2026-04-05 15:36:55.848,DISCONNECT,TCP,127.0.0.1,5050,127.0.0.1,7318,0.992,2896625664,0,0,0,Connection closed

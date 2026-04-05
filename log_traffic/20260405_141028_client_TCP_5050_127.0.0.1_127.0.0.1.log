@@ -1,6 +1,0 @@
-datetime,event_type,proto,server_ip,server_port,client_ip,client_port,elapsed_sec,bytes_sent,bytes_recv,bps_sent,bps_recv,pkt_seq,pkt_loss,pkt_ooo,message
-2026-04-05 14:10:28.319,CONNECT,TCP,127.0.0.1,5050,127.0.0.1,34603,0.001,0,0,0,0,,,,Connected to 127.0.0.1:5050
-2026-04-05 14:10:29.319,DATA,TCP,127.0.0.1,5050,127.0.0.1,34603,1.002,0,2039742464,0,16303719607,,,,interval 1.001s
-2026-04-05 14:10:30.320,DATA,TCP,127.0.0.1,5050,127.0.0.1,34603,2.002,0,4751949824,0,21689070008,,,,interval 1.0s
-2026-04-05 14:10:31.320,DATA,TCP,127.0.0.1,5050,127.0.0.1,34603,3.002,0,7437090816,0,21479454686,,,,interval 1.0s
-2026-04-05 14:10:31.574,DISCONNECT,TCP,127.0.0.1,5050,127.0.0.1,34603,3.257,0,8123383808,0,0,,,,Session ended
