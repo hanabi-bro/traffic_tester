@@ -1,0 +1,4 @@
+datetime,event_type,proto,server_ip,server_port,client_ip,client_port,elapsed_sec,bytes_sent,bytes_recv,bps_sent,bps_recv,pkt_seq,pkt_loss,pkt_ooo,message
+2026-04-05 14:19:18.570,CONNECT,HTTPS,127.0.0.1,443,127.0.0.1,7432,0.001,0,0,0,0,,,,GET /download from 127.0.0.1
+2026-04-05 14:19:19.571,DATA,HTTPS,127.0.0.1,443,127.0.0.1,7432,1.002,896925696,0,7168353341,0,,,,interval 1.001s
+2026-04-05 14:19:20.058,DISCONNECT,HTTPS,127.0.0.1,443,127.0.0.1,7432,1.488,1334509568,0,0,0,,,,Session ended
