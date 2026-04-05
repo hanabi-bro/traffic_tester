@@ -1,0 +1,2 @@
+datetime,event_type,proto,server_ip,server_port,client_ip,client_port,elapsed_sec,bytes_sent,bytes_recv,bps_sent,bps_recv,pkt_seq,pkt_loss,pkt_ooo,message
+2026-04-05 15:37:35.732,CONNECT,UDP,172.16.201.111,30000,127.0.0.1,54003,0.001,0,0,0,0,,0,0,SYN from 127.0.0.1:54003 session_id=c6888f86 mode=download
