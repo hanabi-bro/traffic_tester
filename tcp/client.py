@@ -37,19 +37,120 @@ from common.stats import StatsTracker
 PROTO = "TCP"
 
 
+class ResilientSocket:
+    """Socket wrapper with automatic reconnection capability."""
+    
+    def __init__(self, server_info: tuple[str, int], timeout: float = 30.0):
+        self.server_info = server_info
+        self.timeout = timeout
+        self._sock = self._create_socket()
+        self._lock = threading.Lock()
+        
+    def _create_socket(self) -> socket.socket:
+        """Create a new socket with all optimal settings."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        tcp_no_delay(sock)
+        
+        # TCP keepalive settings
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        except (OSError, AttributeError):
+            pass
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+        
+        sock.connect(self.server_info)
+        return sock
+    
+    def _reconnect(self) -> bool:
+        """Attempt to reconnect the socket."""
+        try:
+            with self._lock:
+                if self._sock:
+                    self._sock.close()
+                self._sock = self._create_socket()
+                print("[TCP Client] Reconnected successfully", file=sys.stderr)
+                return True
+        except OSError as e:
+            print(f"[TCP Client] Reconnection failed: {e}", file=sys.stderr)
+            return False
+    
+    def sendall(self, data: bytes, max_retries: int = 3, retry_delay: float = 1.0) -> bool:
+        """Send data with automatic retry on connection failure."""
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                with self._lock:
+                    if self._sock:
+                        self._sock.sendall(data)
+                        return True
+            except (ConnectionResetError, BrokenPipeError, OSError) as e:
+                print(f"[TCP Client] Send error: {e}", file=sys.stderr)
+                retry_count += 1
+                
+                if retry_count <= max_retries:
+                    print(f"[TCP Client] Retrying connection in {retry_delay}s... ({retry_count}/{max_retries})", file=sys.stderr)
+                    time.sleep(retry_delay)
+                    if self._reconnect():
+                        continue
+                break
+        
+        print("[TCP Client] Max retries reached, giving up", file=sys.stderr)
+        return False
+    
+    def recv(self, bufsize: int, max_retries: int = 3, retry_delay: float = 1.0) -> bytes | None:
+        """Receive data with automatic retry on connection failure."""
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                with self._lock:
+                    if self._sock:
+                        data = self._sock.recv(bufsize)
+                        return data
+            except (ConnectionResetError, BrokenPipeError, OSError) as e:
+                print(f"[TCP Client] Receive error: {e}", file=sys.stderr)
+                retry_count += 1
+                
+                if retry_count <= max_retries:
+                    print(f"[TCP Client] Retrying connection in {retry_delay}s... ({retry_count}/{max_retries})", file=sys.stderr)
+                    time.sleep(retry_delay)
+                    if self._reconnect():
+                        continue
+                break
+        
+        print("[TCP Client] Max retries reached, giving up", file=sys.stderr)
+        return None
+    
+    def getsockname(self) -> tuple[str, int]:
+        """Get socket's own address."""
+        with self._lock:
+            if self._sock:
+                return self._sock.getsockname()
+            raise OSError("Socket not connected")
+    
+    def close(self) -> None:
+        """Close the socket."""
+        with self._lock:
+            if self._sock:
+                self._sock.close()
+                self._sock = None
+
+
 def run_client(args: argparse.Namespace) -> None:
     server_ip = resolve_host(args.host)
     server_port: int = args.port
     client_ip = get_source_ip(server_ip, server_port)
 
-    # Create socket and connect
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(args.timeout_sec)
-    tcp_no_delay(sock)
-
-    connect_time = datetime.now()
+    # Create resilient socket with automatic reconnection
+    server_info = (server_ip, server_port)
     try:
-        sock.connect((server_ip, server_port))
+        sock = ResilientSocket(server_info, timeout=args.timeout_sec)
     except (TimeoutError, OSError) as e:
         print(f"[TCP Client] Connection failed: {e}", file=sys.stderr)
         sys.exit(1)
@@ -63,7 +164,7 @@ def run_client(args: argparse.Namespace) -> None:
         server_port=server_port,
         client_ip=client_ip,
         client_port=client_port,
-        connect_time=connect_time,
+        connect_time=datetime.now(),
     )
     stats = StatsTracker()
     stop_event = threading.Event()
@@ -108,10 +209,10 @@ def run_client(args: argparse.Namespace) -> None:
         if mode == "download":
             _recv_loop(sock, args.blocksize, stats, stop_event, deadline)
         elif mode == "upload":
-            _send_loop(sock, args.blocksize, stats, stop_event, deadline)
+            _send_loop(sock, args.blocksize, stats, stop_event, deadline, server_info)
         else:  # both
             t_send = threading.Thread(
-                target=_send_loop, args=(sock, args.blocksize, stats, stop_event, deadline), daemon=True
+                target=_send_loop, args=(sock, args.blocksize, stats, stop_event, deadline, server_info), daemon=True
             )
             t_recv = threading.Thread(
                 target=_recv_loop, args=(sock, args.blocksize, stats, stop_event, deadline), daemon=True
@@ -145,44 +246,53 @@ def run_client(args: argparse.Namespace) -> None:
 
 
 def _send_loop(
-    sock: socket.socket,
+    sock: ResilientSocket,
     blocksize: int,
     stats: StatsTracker,
     stop: threading.Event,
     deadline: float | None,
+    server_info: tuple[str, int],
 ) -> None:
-    """Upload dummy data to server."""
+    """Upload dummy data to server with automatic reconnection."""
     reader = DummyReader(blocksize)
+    
     while not stop.is_set():
         if deadline and time.monotonic() >= deadline:
             stop.set()
             break
+        
         chunk = reader.read()
-        try:
-            sock.sendall(chunk)
-        except OSError:
+        if not sock.sendall(chunk):
+            # sendall failed and reconnection attempts exhausted
+            stop.set()
             break
+        
         stats.add_sent(len(chunk))
 
 
 def _recv_loop(
-    sock: socket.socket,
+    sock: ResilientSocket,
     blocksize: int,
     stats: StatsTracker,
     stop: threading.Event,
     deadline: float | None,
 ) -> None:
-    """Receive and discard data from server."""
+    """Receive and discard data from server with automatic reconnection."""
     while not stop.is_set():
         if deadline and time.monotonic() >= deadline:
             stop.set()
             break
-        try:
-            data = sock.recv(blocksize)
-        except OSError:
+        
+        data = sock.recv(blocksize)
+        if data is None:
+            # recv failed and reconnection attempts exhausted
+            stop.set()
             break
-        if not data:
+        elif not data:
+            # Connection closed by server
+            print("[TCP Client] Server closed connection", file=sys.stderr)
             break
+        
         stats.add_recv(len(data))
 
 

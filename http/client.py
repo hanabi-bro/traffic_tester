@@ -53,8 +53,7 @@ def _drain_and_close(conn: http.client.HTTPConnection, resp, drain_timeout: floa
          server's write-side encounters our FIN/EOF rather than a RST.
       3. close() the socket.
     """
-    import socket as _socket
-    import struct
+    import socket
     sock = conn.sock
     if sock:
         try:
@@ -77,7 +76,7 @@ def _drain_and_close(conn: http.client.HTTPConnection, resp, drain_timeout: floa
 
         # Half-close our write side first, then let the OS do a clean FIN
         try:
-            sock.shutdown(_socket.SHUT_WR)
+            sock.shutdown(socket.SHUT_WR)
         except OSError:
             pass
 
@@ -85,7 +84,69 @@ def _drain_and_close(conn: http.client.HTTPConnection, resp, drain_timeout: floa
 
 
 def _make_connection(server_ip: str, server_port: int, timeout: float) -> http.client.HTTPConnection:
-    return http.client.HTTPConnection(server_ip, server_port, timeout=timeout)
+    """Create HTTP connection with enhanced socket options."""
+    import socket
+    conn = http.client.HTTPConnection(server_ip, server_port, timeout=timeout)
+    
+    # Apply socket options after connection is established
+    def connect_with_opts():
+        original_connect = conn.connect
+        def enhanced_connect():
+            original_connect()
+            if conn.sock:
+                # TCP keepalive settings
+                conn.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                try:
+                    conn.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+                    conn.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+                    conn.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+                except (OSError, AttributeError):
+                    pass
+                # Buffer optimization
+                conn.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+                conn.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+        conn.connect = enhanced_connect
+    
+    return conn
+
+
+def _make_resilient_request(
+    server_ip: str,
+    server_port: int,
+    args: argparse.Namespace,
+    method: str,
+    url: str,
+    max_retries: int = 3,
+    retry_delay: float = 2.0,
+) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
+    """Make HTTP request with automatic retry on connection failure."""
+    for attempt in range(max_retries + 1):
+        try:
+            conn = _make_connection(server_ip, server_port, args.timeout_sec)
+            conn.request(method, url)
+            resp = conn.getresponse()
+            
+            if resp.status == 200:
+                return conn, resp
+            else:
+                conn.close()
+                if attempt < max_retries:
+                    print(f"[HTTP Client] Server returned {resp.status}, retrying in {retry_delay}s...", file=sys.stderr)
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    raise http.client.HTTPError(f"HTTP {resp.status}")
+                    
+        except (http.client.HTTPException, ConnectionError, OSError, TimeoutError) as e:
+            if conn:
+                conn.close()
+            if attempt < max_retries:
+                print(f"[HTTP Client] Request failed: {e}, retrying in {retry_delay}s... ({attempt + 1}/{max_retries})", file=sys.stderr)
+                time.sleep(retry_delay)
+            else:
+                raise
+    
+    raise ConnectionError("Max retries reached")
 
 
 def run_download(
@@ -98,18 +159,20 @@ def run_download(
     connect_logged: threading.Event,
 ) -> tuple[str, str]:
     """
-    GET /download and discard received data.
+    GET /download and discard received data with reconnection support.
     Writes CONNECT log after the socket is established (to capture real client_port).
     Returns (event_type, message).
     """
-    conn = _make_connection(server_ip, server_port, args.timeout_sec)
+    conn = None
     resp = None
     event_type = EVENT_DISCONNECT
     msg = "Download ended"
+    
     try:
-        conn.request("GET", "/download")
+        # Make resilient request with retry
+        conn, resp = _make_resilient_request(server_ip, server_port, args, "GET", "/download")
 
-        # Socket is now connected — capture actual ephemeral port
+        # Socket is now connected - capture actual ephemeral port
         if conn.sock:
             logger.client_port = conn.sock.getsockname()[1]
 
@@ -118,10 +181,6 @@ def run_download(
                        message=f"Connected to {server_ip}:{server_port} mode={args.mode}")
             connect_logged.set()
 
-        resp = conn.getresponse()
-        if resp.status != 200:
-            return EVENT_ERROR, f"HTTP {resp.status}"
-
         blocksize = args.blocksize
         deadline = (time.monotonic() + args.duration) if args.duration > 0 else None
 
@@ -129,10 +188,23 @@ def run_download(
             if deadline and time.monotonic() >= deadline:
                 stop_event.set()
                 break
-            data = resp.read(blocksize)
-            if not data:
-                break
-            stats.add_recv(len(data))
+            
+            try:
+                data = resp.read(blocksize)
+                if not data:
+                    break
+                stats.add_recv(len(data))
+            except (ConnectionResetError, BrokenPipeError, OSError) as e:
+                print(f"[HTTP Client] Data receive error: {e}", file=sys.stderr)
+                # Try to reconnect and resume
+                try:
+                    conn.close()
+                    conn, resp = _make_resilient_request(server_ip, server_port, args, "GET", "/download")
+                    print("[HTTP Client] Reconnected and resumed download", file=sys.stderr)
+                    continue
+                except Exception as reconnect_error:
+                    print(f"[HTTP Client] Reconnection failed: {reconnect_error}", file=sys.stderr)
+                    break
 
     except TimeoutError:
         event_type = EVENT_TIMEOUT

@@ -38,6 +38,11 @@ EVENT_DISCONNECT = "DISCONNECT"
 EVENT_TIMEOUT    = "TIMEOUT"
 EVENT_ERROR      = "ERROR"
 
+# UDP-specific event types
+EVENT_LOSS           = "LOSS"
+EVENT_OUT_OF_ORDER   = "OUT_OF_ORDER"
+EVENT_LATE_ARRIVAL   = "LATE_ARRIVAL"
+
 
 def _log_dir(logdir: Path) -> Path:
     """Ensure log directory exists and return it."""
