@@ -33,6 +33,7 @@ from common.logger import (
     EVENT_LOSS, EVENT_OUT_OF_ORDER, EVENT_LATE_ARRIVAL,
     TrafficLogger,
 )
+from common.rich_output import RichTrafficOutput
 from common.stats import StatsTracker
 from udp.frame import (
     SYN, SYNACK, DATA, FIN, FINACK,
@@ -57,6 +58,7 @@ class UDPClient:
         blocksize: int,
         mode: str,
         logdir: Path,
+        rich_output=None,
     ) -> None:
         self.server_ip = resolve_host(server_host)
         self.server_port = server_port
@@ -66,6 +68,7 @@ class UDPClient:
         self.blocksize = blocksize
         self.mode_val = string_to_mode(mode)
         self.logdir = logdir
+        self.rich_output = rich_output
         
         # Client socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -237,6 +240,7 @@ class UDPClient:
                         client_ip=self.client_ip,
                         client_port=self.client_port,
                         connect_time=self.connect_time,
+                        rich_output=self.rich_output,
                     )
                 
                 # Wait for SYNACK
@@ -484,11 +488,16 @@ def parse_args() -> argparse.Namespace:
                    help="Transfer direction (client perspective)")
     p.add_argument("--logdir", type=Path, default=Path("./log_traffic"),
                    help="Log output directory")
+    p.add_argument("--threshold", type=int, default=1000,
+                   help="Data transfer rate threshold for warnings (bytes/sec)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    
+    # Initialize rich output handler
+    rich_output = RichTrafficOutput(threshold=args.threshold)
     
     client = UDPClient(
         server_host=args.host,
@@ -499,10 +508,11 @@ def main() -> None:
         blocksize=args.blocksize,
         mode=args.mode,
         logdir=args.logdir,
+        rich_output=rich_output,
     )
     
     client.run()
-    print("[UDP Client] Done.")
+    rich_output.print_message("[UDP Client] Done.", "INFO")
 
 
 if __name__ == "__main__":

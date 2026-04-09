@@ -6,7 +6,6 @@ Handles file creation per connection and stdout output.
 from __future__ import annotations
 
 import csv
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -29,6 +28,8 @@ CSV_FIELDS = [
     "pkt_seq",
     "pkt_loss",
     "pkt_ooo",
+    "mode",
+    "role",
 ]
 
 # Event types
@@ -92,13 +93,16 @@ class TrafficLogger:
         client_port: int,
         role: str = "client",
         connect_time: Optional[datetime] = None,
+        rich_output=None,
     ) -> None:
         self.proto = proto
         self.server_ip = server_ip
         self.server_port = server_port
         self.client_ip = client_ip
         self.client_port = client_port
+        self.role = role
         self.connect_time = connect_time or datetime.now()
+        self.rich_output = rich_output
 
         # Build file path
         logdir = _log_dir(logdir)
@@ -129,6 +133,7 @@ class TrafficLogger:
         pkt_seq: int|str = "",
         pkt_loss: int|str = "",
         pkt_ooo: int|str = "",
+        mode: str = "",
     ) -> None:
         """Write one CSV row to file and stdout."""
         row = {
@@ -148,6 +153,8 @@ class TrafficLogger:
             "pkt_seq":     pkt_seq,
             "pkt_loss":    pkt_loss,
             "pkt_ooo":     pkt_ooo,
+            "mode":        mode,
+            "role":        self.role,
         }
         self._writer.writerow(row)
         self._file.flush()
@@ -164,8 +171,11 @@ class TrafficLogger:
     # Internal
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _print_row(row: dict) -> None:
-        """Print CSV row to stdout."""
-        values = [str(row[f]) for f in CSV_FIELDS]
-        print(",".join(values), flush=True)
+    def _print_row(self, row: dict) -> None:
+        """Print CSV row to stdout with rich formatting if available."""
+        if self.rich_output:
+            self.rich_output.print_row(row)
+        else:
+            # Fallback to regular print
+            values = [str(row[f]) for f in CSV_FIELDS]
+            print(",".join(values), flush=True)

@@ -31,6 +31,7 @@ from common.logger import (
     EVENT_CONNECT, EVENT_DATA, EVENT_DISCONNECT, EVENT_ERROR, EVENT_TIMEOUT,
     TrafficLogger,
 )
+from common.rich_output import RichTrafficOutput
 from common.stats import StatsTracker
 
 PROTO = "TCP"
@@ -55,6 +56,7 @@ class TCPClientHandler(socketserver.BaseRequestHandler):
             client_port=client_port,
             role="server",
             connect_time=self.connect_time,
+            rich_output=self.server.rich_output,
         )
         self.stats = StatsTracker()
         self._stop_event = threading.Event()
@@ -62,7 +64,7 @@ class TCPClientHandler(socketserver.BaseRequestHandler):
         # finish() checks this to avoid writing a duplicate DISCONNECT.
         self._terminal_logged = False
 
-        self.logger.log(EVENT_CONNECT, message=f"Client connected from {client_ip}:{client_port}")
+        self.logger.log(EVENT_CONNECT, message=f"Client connected from {client_ip}:{client_port}", mode=self.server.mode)
 
     def handle(self) -> None:
         sock = self.request
@@ -98,7 +100,7 @@ class TCPClientHandler(socketserver.BaseRequestHandler):
             sent, recv = self.stats.totals()
             self.logger.log(EVENT_TIMEOUT, elapsed_sec=elapsed,
                             bytes_sent=sent, bytes_recv=recv,
-                            message="Connection timed out")
+                            message="Connection timed out", mode=self.server.mode)
             self._terminal_logged = True
 
         except (ConnectionResetError, BrokenPipeError) as e:
@@ -106,7 +108,7 @@ class TCPClientHandler(socketserver.BaseRequestHandler):
             sent, recv = self.stats.totals()
             self.logger.log(EVENT_DISCONNECT, elapsed_sec=elapsed,
                             bytes_sent=sent, bytes_recv=recv,
-                            message=f"Client disconnected ({e})")
+                            message=f"Client disconnected ({e})", mode=self.server.mode)
             self._terminal_logged = True
 
         except OSError as e:
@@ -114,7 +116,7 @@ class TCPClientHandler(socketserver.BaseRequestHandler):
             sent, recv = self.stats.totals()
             self.logger.log(EVENT_ERROR, elapsed_sec=elapsed,
                             bytes_sent=sent, bytes_recv=recv,
-                            message=str(e))
+                            message=str(e), mode=self.server.mode)
             self._terminal_logged = True
 
         finally:
@@ -128,7 +130,7 @@ class TCPClientHandler(socketserver.BaseRequestHandler):
         if not self._terminal_logged:
             self.logger.log(EVENT_DISCONNECT, elapsed_sec=elapsed,
                             bytes_sent=sent, bytes_recv=recv,
-                            message="Connection closed")
+                            message="Connection closed", mode=self.server.mode)
         self.logger.close()
 
     # ------------------------------------------------------------------
@@ -166,6 +168,7 @@ class TCPClientHandler(socketserver.BaseRequestHandler):
                 bps_sent=snap.bps_sent,
                 bps_recv=snap.bps_recv,
                 message=f"interval {interval}s",
+                mode=self.server.mode,
             )
 
 
@@ -182,12 +185,14 @@ class ThreadedTCPServer(socketserver.ThreadingTCPServer):
         interval: float,
         blocksize: int,
         mode: str,
+        rich_output=None,
     ) -> None:
         self.logdir = logdir
         self.timeout_sec = timeout_sec
         self.interval = interval
         self.blocksize = blocksize
         self.mode = mode
+        self.rich_output = rich_output
         super().__init__((bind_addr, port), TCPClientHandler)
 
 
@@ -212,11 +217,16 @@ def parse_args() -> argparse.Namespace:
                    help="Transfer direction: download=server sends to client, upload=server receives")
     p.add_argument("--logdir", type=Path, default=Path("./log_traffic"),
                    help="Log output directory")
+    p.add_argument("--threshold", type=int, default=1000,
+                   help="Data transfer rate threshold for warnings (bytes/sec)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    # Initialize rich output handler
+    rich_output = RichTrafficOutput(threshold=args.threshold)
 
     server = ThreadedTCPServer(
         bind_addr=args.bind,
@@ -226,18 +236,19 @@ def main() -> None:
         interval=args.interval,
         blocksize=args.blocksize,
         mode=args.mode,
+        rich_output=rich_output,
     )
 
-    print(f"[TCP Server] Listening on {args.bind}:{args.port}  mode={args.mode}  "
-          f"timeout={args.timeout_sec}s  interval={args.interval}s  blocksize={args.blocksize}B")
-    print("[TCP Server] Press Ctrl+C to stop.")
+    rich_output.print_message(f"[TCP Server] Listening on {args.bind}:{args.port}  mode={args.mode}  "
+          f"timeout={args.timeout_sec}s  interval={args.interval}s  blocksize={args.blocksize}B", "INFO")
+    rich_output.print_message("[TCP Server] Press Ctrl+C to stop.", "INFO")
 
     _shutdown_called = threading.Event()
 
     def _shutdown(sig, frame):
         if not _shutdown_called.is_set():
             _shutdown_called.set()
-            print("\n[TCP Server] Shutting down...", flush=True)
+            rich_output.print_message("\n[TCP Server] Shutting down...", "INFO")
             threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGINT, _shutdown)
@@ -245,7 +256,7 @@ def main() -> None:
         signal.signal(signal.SIGTERM, _shutdown)
 
     server.serve_forever()
-    print("[TCP Server] Stopped.")
+    rich_output.print_message("[TCP Server] Stopped.", "INFO")
 
 
 if __name__ == "__main__":

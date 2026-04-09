@@ -37,6 +37,7 @@ from common.logger import (
     EVENT_CONNECT, EVENT_DATA, EVENT_DISCONNECT, EVENT_ERROR, EVENT_TIMEOUT,
     TrafficLogger,
 )
+from common.rich_output import RichTrafficOutput
 from common.stats import StatsTracker
 
 PROTO = "HTTPS"
@@ -182,7 +183,7 @@ def run_download(
         if not connect_logged.is_set():
             verify_str = "on" if args.verify else "off (self-signed OK)"
             logger.log(EVENT_CONNECT,
-                       message=f"Connected to {server_ip}:{server_port} mode={args.mode} verify={verify_str}")
+                       message=f"Connected to {server_ip}:{server_port} mode={args.mode} verify={verify_str}", mode=args.mode)
             connect_logged.set()
 
         blocksize = args.blocksize
@@ -198,6 +199,10 @@ def run_download(
                 if not data:
                     break
                 stats.add_recv(len(data))
+            except http.client.IncompleteRead as e:
+                # Server disconnected during chunked transfer - normal when server stops
+                print(f"[HTTPS Client] Server disconnected during transfer: {e}", file=sys.stderr)
+                break
             except (ConnectionResetError, BrokenPipeError, OSError, ssl.SSLError) as e:
                 print(f"[HTTPS Client] Data receive error: {e}", file=sys.stderr)
                 # Try to reconnect and resume
@@ -254,7 +259,7 @@ def run_upload(
         if not connect_logged.is_set():
             verify_str = "on" if args.verify else "off (self-signed OK)"
             logger.log(EVENT_CONNECT,
-                       message=f"Connected to {server_ip}:{server_port} mode={args.mode} verify={verify_str}")
+                       message=f"Connected to {server_ip}:{server_port} mode={args.mode} verify={verify_str}", mode=args.mode)
             connect_logged.set()
 
         while not stop_event.is_set():
@@ -295,6 +300,9 @@ def run_upload(
 
 
 def run_client(args: argparse.Namespace) -> None:
+    # Initialize rich output handler
+    rich_output = RichTrafficOutput(threshold=args.threshold)
+    
     server_ip = resolve_host(args.host)
     server_port: int = args.port
     client_ip = get_source_ip(server_ip, server_port)
@@ -308,6 +316,7 @@ def run_client(args: argparse.Namespace) -> None:
         client_ip=client_ip,
         client_port=0,
         connect_time=connect_time,
+        rich_output=rich_output,
     )
     stats = StatsTracker()
     stop_event = threading.Event()
@@ -333,6 +342,7 @@ def run_client(args: argparse.Namespace) -> None:
                 bps_sent=snap.bps_sent,
                 bps_recv=snap.bps_recv,
                 message=f"interval {args.interval}s",
+                mode=args.mode,
             )
 
     reporter = threading.Thread(target=_report_loop, daemon=True)
@@ -385,7 +395,7 @@ def run_client(args: argparse.Namespace) -> None:
         elapsed = stats.elapsed()
         sent, recv = stats.totals()
         logger.log(event_type, elapsed_sec=elapsed, bytes_sent=sent,
-                   bytes_recv=recv, message=msg)
+                   bytes_recv=recv, message=msg, mode=args.mode)
         logger.close()
 
 
@@ -414,18 +424,21 @@ def parse_args() -> argparse.Namespace:
                    help="Enable TLS certificate verification (default: disabled)")
     p.add_argument("--logdir", type=Path, default=Path("./log_traffic"),
                    help="Log output directory")
+    p.add_argument("--threshold", type=int, default=1000,
+                   help="Data transfer rate threshold for warnings (bytes/sec)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     verify_str = "on" if args.verify else "off"
-    print(f"[HTTPS Client] Connecting to {args.host}:{args.port}  mode={args.mode}  "
+    rich_output = RichTrafficOutput(threshold=args.threshold)
+    rich_output.print_message(f"[HTTPS Client] Connecting to {args.host}:{args.port}  mode={args.mode}  "
           f"duration={args.duration}s  interval={args.interval}s  blocksize={args.blocksize}B  "
-          f"verify={verify_str}")
-    print("[HTTPS Client] Press Ctrl+C to stop.")
+          f"verify={verify_str}", "INFO")
+    rich_output.print_message("[HTTPS Client] Press Ctrl+C to stop.", "INFO")
     run_client(args)
-    print("[HTTPS Client] Done.")
+    rich_output.print_message("[HTTPS Client] Done.", "INFO")
 
 
 if __name__ == "__main__":

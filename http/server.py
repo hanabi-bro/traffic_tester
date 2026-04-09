@@ -34,6 +34,7 @@ from common.logger import (
     EVENT_CONNECT, EVENT_DATA, EVENT_DISCONNECT, EVENT_ERROR, EVENT_TIMEOUT,
     TrafficLogger,
 )
+from common.rich_output import RichTrafficOutput
 from common.stats import StatsTracker
 
 PROTO = "HTTP"
@@ -68,6 +69,7 @@ class TrafficHTTPHandler(http.server.BaseHTTPRequestHandler):
             client_port=client_port,
             role="server",
             connect_time=datetime.now(),
+            rich_output=_config.get("rich_output"),
         )
 
     # ------------------------------------------------------------------
@@ -86,7 +88,7 @@ class TrafficHTTPHandler(http.server.BaseHTTPRequestHandler):
         interval: float = _config["interval"]
         timeout: float = _config["timeout_sec"]
 
-        logger.log(EVENT_CONNECT, message=f"GET {self.path} from {self.client_address[0]}")
+        logger.log(EVENT_CONNECT, message=f"GET {self.path} from {self.client_address[0]}", mode=_config["mode"])
 
         # Send headers
         self.send_response(200)
@@ -132,7 +134,7 @@ class TrafficHTTPHandler(http.server.BaseHTTPRequestHandler):
             elapsed = stats.elapsed()
             sent, recv = stats.totals()
             logger.log(event_type, elapsed_sec=elapsed,
-                       bytes_sent=sent, bytes_recv=recv, message=msg)
+                       bytes_sent=sent, bytes_recv=recv, message=msg, mode=_config["mode"])
             logger.close()
 
     # ------------------------------------------------------------------
@@ -151,7 +153,7 @@ class TrafficHTTPHandler(http.server.BaseHTTPRequestHandler):
         interval: float = _config["interval"]
         timeout: float = _config["timeout_sec"]
 
-        logger.log(EVENT_CONNECT, message=f"POST {self.path} from {self.client_address[0]}")
+        logger.log(EVENT_CONNECT, message=f"POST {self.path} from {self.client_address[0]}", mode=_config["mode"])
 
         # Stats reporter
         reporter = threading.Thread(target=self._report_loop,
@@ -207,7 +209,7 @@ class TrafficHTTPHandler(http.server.BaseHTTPRequestHandler):
             elapsed = stats.elapsed()
             sent, recv = stats.totals()
             logger.log(event_type, elapsed_sec=elapsed,
-                       bytes_sent=sent, bytes_recv=recv, message=msg)
+                       bytes_sent=sent, bytes_recv=recv, message=msg, mode=_config["mode"])
             logger.close()
 
     # ------------------------------------------------------------------
@@ -252,6 +254,7 @@ class TrafficHTTPHandler(http.server.BaseHTTPRequestHandler):
                 bps_sent=snap.bps_sent,
                 bps_recv=snap.bps_recv,
                 message=f"interval {interval}s",
+                mode=_config["mode"],
             )
 
 
@@ -292,11 +295,18 @@ def parse_args() -> argparse.Namespace:
                    help="Send/recv block size (bytes)")
     p.add_argument("--logdir", type=Path, default=Path("./log_traffic"),
                    help="Log output directory")
+    p.add_argument("--mode", choices=["download", "upload", "both"], default="download",
+                   help="Transfer direction: download=server sends to client, upload=server receives")
+    p.add_argument("--threshold", type=int, default=1000,
+                   help="Data transfer rate threshold for warnings (bytes/sec)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    # Initialize rich output handler
+    rich_output = RichTrafficOutput(threshold=args.threshold)
 
     # Populate module-level config (shared with handler)
     _config.update({
@@ -304,24 +314,26 @@ def main() -> None:
         "timeout_sec": args.timeout_sec,
         "interval": args.interval,
         "blocksize": args.blocksize,
+        "mode": args.mode,
+        "rich_output": rich_output,
     })
 
     server = ThreadingHTTPServer((args.bind, args.port), TrafficHTTPHandler)
 
-    print(f"[HTTP Server] Listening on {args.bind}:{args.port}")
-    print(f"[HTTP Server] GET /download  -> stream to client")
-    print(f"[HTTP Server] POST /upload   -> receive from client")
-    print(f"[HTTP Server] timeout={args.timeout_sec}s  interval={args.interval}s  "
-          f"blocksize={args.blocksize}B")
-    print("[HTTP Server] Press Ctrl+C to stop.")
+    rich_output.print_message(f"[HTTP Server] Listening on {args.bind}:{args.port}", "INFO")
+    rich_output.print_message(f"[HTTP Server] GET /download  -> stream to client", "INFO")
+    rich_output.print_message(f"[HTTP Server] POST /upload   -> receive from client", "INFO")
+    rich_output.print_message(f"[HTTP Server] timeout={args.timeout_sec}s  interval={args.interval}s  "
+          f"blocksize={args.blocksize}B", "INFO")
+    rich_output.print_message("[HTTP Server] Press Ctrl+C to stop.", "INFO")
 
     def _shutdown(sig, frame):
-        print("\n[HTTP Server] Shutting down...")
+        rich_output.print_message("\n[HTTP Server] Shutting down...", "INFO")
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGINT, _shutdown)
     server.serve_forever()
-    print("[HTTP Server] Stopped.")
+    rich_output.print_message("[HTTP Server] Stopped.", "INFO")
 
 
 if __name__ == "__main__":

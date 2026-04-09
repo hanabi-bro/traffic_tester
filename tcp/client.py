@@ -32,6 +32,7 @@ from common.logger import (
     EVENT_CONNECT, EVENT_DATA, EVENT_DISCONNECT, EVENT_ERROR, EVENT_TIMEOUT,
     TrafficLogger,
 )
+from common.rich_output import RichTrafficOutput
 from common.stats import StatsTracker
 
 PROTO = "TCP"
@@ -40,9 +41,10 @@ PROTO = "TCP"
 class ResilientSocket:
     """Socket wrapper with automatic reconnection capability."""
     
-    def __init__(self, server_info: tuple[str, int], timeout: float = 30.0):
+    def __init__(self, server_info: tuple[str, int], timeout: float = 30.0, rich_output=None):
         self.server_info = server_info
         self.timeout = timeout
+        self.rich_output = rich_output
         self._sock = self._create_socket()
         self._lock = threading.Lock()
         
@@ -73,10 +75,16 @@ class ResilientSocket:
                 if self._sock:
                     self._sock.close()
                 self._sock = self._create_socket()
-                print("[TCP Client] Reconnected successfully", file=sys.stderr)
+                if self.rich_output:
+                    self.rich_output.print_message("[TCP Client] Reconnected successfully", "INFO")
+                else:
+                    print("[TCP Client] Reconnected successfully", file=sys.stderr)
                 return True
         except OSError as e:
-            print(f"[TCP Client] Reconnection failed: {e}", file=sys.stderr)
+            if self.rich_output:
+                self.rich_output.print_message(f"[TCP Client] Reconnection failed: {e}", "ERROR")
+            else:
+                print(f"[TCP Client] Reconnection failed: {e}", file=sys.stderr)
             return False
     
     def sendall(self, data: bytes, max_retries: int = 3, retry_delay: float = 1.0) -> bool:
@@ -90,17 +98,26 @@ class ResilientSocket:
                         self._sock.sendall(data)
                         return True
             except (ConnectionResetError, BrokenPipeError, OSError) as e:
-                print(f"[TCP Client] Send error: {e}", file=sys.stderr)
+                if self.rich_output:
+                    self.rich_output.print_message(f"[TCP Client] Send error: {e}", "ERROR")
+                else:
+                    print(f"[TCP Client] Send error: {e}", file=sys.stderr)
                 retry_count += 1
                 
                 if retry_count <= max_retries:
-                    print(f"[TCP Client] Retrying connection in {retry_delay}s... ({retry_count}/{max_retries})", file=sys.stderr)
+                    if self.rich_output:
+                        self.rich_output.print_message(f"[TCP Client] Retrying connection in {retry_delay}s... ({retry_count}/{max_retries})", "INFO")
+                    else:
+                        print(f"[TCP Client] Retrying connection in {retry_delay}s... ({retry_count}/{max_retries})", file=sys.stderr)
                     time.sleep(retry_delay)
                     if self._reconnect():
                         continue
                 break
         
-        print("[TCP Client] Max retries reached, giving up", file=sys.stderr)
+        if self.rich_output:
+            self.rich_output.print_message("[TCP Client] Max retries reached, giving up", "ERROR")
+        else:
+            print("[TCP Client] Max retries reached, giving up", file=sys.stderr)
         return False
     
     def recv(self, bufsize: int, max_retries: int = 3, retry_delay: float = 1.0) -> bytes | None:
@@ -114,17 +131,26 @@ class ResilientSocket:
                         data = self._sock.recv(bufsize)
                         return data
             except (ConnectionResetError, BrokenPipeError, OSError) as e:
-                print(f"[TCP Client] Receive error: {e}", file=sys.stderr)
+                if self.rich_output:
+                    self.rich_output.print_message(f"[TCP Client] Receive error: {e}", "ERROR")
+                else:
+                    print(f"[TCP Client] Receive error: {e}", file=sys.stderr)
                 retry_count += 1
                 
                 if retry_count <= max_retries:
-                    print(f"[TCP Client] Retrying connection in {retry_delay}s... ({retry_count}/{max_retries})", file=sys.stderr)
+                    if self.rich_output:
+                        self.rich_output.print_message(f"[TCP Client] Retrying connection in {retry_delay}s... ({retry_count}/{max_retries})", "INFO")
+                    else:
+                        print(f"[TCP Client] Retrying connection in {retry_delay}s... ({retry_count}/{max_retries})", file=sys.stderr)
                     time.sleep(retry_delay)
                     if self._reconnect():
                         continue
                 break
         
-        print("[TCP Client] Max retries reached, giving up", file=sys.stderr)
+        if self.rich_output:
+            self.rich_output.print_message("[TCP Client] Max retries reached, giving up", "ERROR")
+        else:
+            print("[TCP Client] Max retries reached, giving up", file=sys.stderr)
         return None
     
     def getsockname(self) -> tuple[str, int]:
@@ -147,16 +173,22 @@ def run_client(args: argparse.Namespace) -> None:
     server_port: int = args.port
     client_ip = get_source_ip(server_ip, server_port)
 
+    # Initialize rich output handler
+    rich_output = RichTrafficOutput(threshold=args.threshold)
+
     # Create resilient socket with automatic reconnection
     server_info = (server_ip, server_port)
     try:
-        sock = ResilientSocket(server_info, timeout=args.timeout_sec)
+        sock = ResilientSocket(server_info, timeout=args.timeout_sec, rich_output=rich_output)
     except (TimeoutError, OSError) as e:
-        print(f"[TCP Client] Connection failed: {e}", file=sys.stderr)
+        if rich_output:
+            rich_output.print_message(f"[TCP Client] Connection failed: {e}", "ERROR")
+        else:
+            print(f"[TCP Client] Connection failed: {e}", file=sys.stderr)
         sys.exit(1)
 
     client_port = sock.getsockname()[1]
-
+    
     logger = TrafficLogger(
         logdir=args.logdir,
         proto=PROTO,
@@ -165,6 +197,7 @@ def run_client(args: argparse.Namespace) -> None:
         client_ip=client_ip,
         client_port=client_port,
         connect_time=datetime.now(),
+        rich_output=rich_output,
     )
     stats = StatsTracker()
     stop_event = threading.Event()
@@ -195,6 +228,7 @@ def run_client(args: argparse.Namespace) -> None:
                 bps_sent=snap.bps_sent,
                 bps_recv=snap.bps_recv,
                 message=f"interval {args.interval}s",
+                mode=args.mode,
             )
 
     reporter = threading.Thread(target=_report_loop, daemon=True)
@@ -241,6 +275,7 @@ def run_client(args: argparse.Namespace) -> None:
             bytes_sent=sent,
             bytes_recv=recv,
             message=error_msg or "Session ended",
+            mode=args.mode,
         )
         logger.close()
 
@@ -290,7 +325,10 @@ def _recv_loop(
             break
         elif not data:
             # Connection closed by server
-            print("[TCP Client] Server closed connection", file=sys.stderr)
+            if sock.rich_output:
+                sock.rich_output.print_message("[TCP Client] Server closed connection", "DISCONNECT")
+            else:
+                print("[TCP Client] Server closed connection", file=sys.stderr)
             break
         
         stats.add_recv(len(data))
@@ -319,16 +357,19 @@ def parse_args() -> argparse.Namespace:
                    help="Transfer direction (client perspective)")
     p.add_argument("--logdir", type=Path, default=Path("./log_traffic"),
                    help="Log output directory")
+    p.add_argument("--threshold", type=int, default=1000,
+                   help="Data transfer rate threshold for warnings (bytes/sec)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    print(f"[TCP Client] Connecting to {args.host}:{args.port}  mode={args.mode}  "
-          f"duration={args.duration}s  interval={args.interval}s  blocksize={args.blocksize}B")
-    print("[TCP Client] Press Ctrl+C to stop.")
+    rich_output = RichTrafficOutput(threshold=args.threshold)
+    rich_output.print_message(f"[TCP Client] Connecting to {args.host}:{args.port}  mode={args.mode}  "
+          f"duration={args.duration}s  interval={args.interval}s  blocksize={args.blocksize}B", "INFO")
+    rich_output.print_message("[TCP Client] Press Ctrl+C to stop.", "INFO")
     run_client(args)
-    print("[TCP Client] Done.")
+    rich_output.print_message("[TCP Client] Done.", "INFO")
 
 
 if __name__ == "__main__":

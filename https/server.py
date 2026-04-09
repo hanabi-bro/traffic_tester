@@ -40,6 +40,7 @@ from common.logger import (
     EVENT_CONNECT, EVENT_DATA, EVENT_DISCONNECT, EVENT_ERROR, EVENT_TIMEOUT,
     TrafficLogger,
 )
+from common.rich_output import RichTrafficOutput
 from common.stats import StatsTracker
 from https.cert_utils import generate_self_signed_cert
 
@@ -72,6 +73,7 @@ class TrafficHTTPSHandler(http.server.BaseHTTPRequestHandler):
             client_port=client_port,
             role="server",
             connect_time=datetime.now(),
+            rich_output=_config.get("rich_output"),
         )
 
     def do_GET(self) -> None:
@@ -86,7 +88,7 @@ class TrafficHTTPSHandler(http.server.BaseHTTPRequestHandler):
         interval: float = _config["interval"]
         timeout: float = _config["timeout_sec"]
 
-        logger.log(EVENT_CONNECT, message=f"GET {self.path} from {self.client_address[0]}")
+        logger.log(EVENT_CONNECT, message=f"GET {self.path} from {self.client_address[0]}", mode=_config["mode"])
 
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
@@ -137,7 +139,7 @@ class TrafficHTTPSHandler(http.server.BaseHTTPRequestHandler):
             elapsed = stats.elapsed()
             sent, recv = stats.totals()
             logger.log(event_type, elapsed_sec=elapsed,
-                       bytes_sent=sent, bytes_recv=recv, message=msg)
+                       bytes_sent=sent, bytes_recv=recv, message=msg, mode=_config["mode"])
             logger.close()
 
     def do_POST(self) -> None:
@@ -152,7 +154,7 @@ class TrafficHTTPSHandler(http.server.BaseHTTPRequestHandler):
         interval: float = _config["interval"]
         timeout: float = _config["timeout_sec"]
 
-        logger.log(EVENT_CONNECT, message=f"POST {self.path} from {self.client_address[0]}")
+        logger.log(EVENT_CONNECT, message=f"POST {self.path} from {self.client_address[0]}", mode=_config["mode"])
 
         reporter = threading.Thread(
             target=self._report_loop,
@@ -213,7 +215,7 @@ class TrafficHTTPSHandler(http.server.BaseHTTPRequestHandler):
             elapsed = stats.elapsed()
             sent, recv = stats.totals()
             logger.log(event_type, elapsed_sec=elapsed,
-                       bytes_sent=sent, bytes_recv=recv, message=msg)
+                       bytes_sent=sent, bytes_recv=recv, message=msg, mode=_config["mode"])
             logger.close()
 
     def _read_chunked(self, stats: StatsTracker, blocksize: int, stop: threading.Event) -> None:
@@ -250,6 +252,7 @@ class TrafficHTTPSHandler(http.server.BaseHTTPRequestHandler):
                 bps_sent=snap.bps_sent,
                 bps_recv=snap.bps_recv,
                 message=f"interval {interval}s",
+                mode=_config["mode"],
             )
 
 
@@ -283,11 +286,16 @@ def parse_args() -> argparse.Namespace:
                    help="PEM private key file path (auto-generated if omitted)")
     p.add_argument("--logdir", type=Path, default=Path("./log_traffic"),
                    help="Log output directory")
+    p.add_argument("--threshold", type=int, default=1000,
+                   help="Data transfer rate threshold for warnings (bytes/sec)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    # Initialize rich output handler
+    rich_output = RichTrafficOutput(threshold=args.threshold)
 
     # Certificate setup
     temp_cert: Path | None = None
@@ -296,13 +304,13 @@ def main() -> None:
     if args.cert and args.key:
         cert_path = args.cert
         key_path = args.key
-        print(f"[HTTPS Server] Using certificate: {cert_path}")
+        rich_output.print_message(f"[HTTPS Server] Using certificate: {cert_path}", "INFO")
     else:
-        print("[HTTPS Server] Generating self-signed certificate...")
+        rich_output.print_message("[HTTPS Server] Generating self-signed certificate...", "INFO")
         temp_cert, temp_key = generate_self_signed_cert(common_name=args.bind)
         cert_path = temp_cert
         key_path = temp_key
-        print(f"[HTTPS Server] Temp cert: {cert_path}")
+        rich_output.print_message(f"[HTTPS Server] Temp cert: {cert_path}", "INFO")
 
     # SSL context
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -313,20 +321,21 @@ def main() -> None:
         "timeout_sec": args.timeout_sec,
         "interval": args.interval,
         "blocksize": args.blocksize,
+        "rich_output": rich_output,
     })
 
     server = ThreadingHTTPSServer((args.bind, args.port), TrafficHTTPSHandler)
     server.socket = ctx.wrap_socket(server.socket, server_side=True)
 
-    print(f"[HTTPS Server] Listening on {args.bind}:{args.port}")
-    print(f"[HTTPS Server] GET /download  -> stream to client")
-    print(f"[HTTPS Server] POST /upload   -> receive from client")
-    print(f"[HTTPS Server] timeout={args.timeout_sec}s  interval={args.interval}s  "
-          f"blocksize={args.blocksize}B")
-    print("[HTTPS Server] Press Ctrl+C to stop.")
+    rich_output.print_message(f"[HTTPS Server] Listening on {args.bind}:{args.port}", "INFO")
+    rich_output.print_message(f"[HTTPS Server] GET /download  -> stream to client", "INFO")
+    rich_output.print_message(f"[HTTPS Server] POST /upload   -> receive from client", "INFO")
+    rich_output.print_message(f"[HTTPS Server] timeout={args.timeout_sec}s  interval={args.interval}s  "
+          f"blocksize={args.blocksize}B", "INFO")
+    rich_output.print_message("[HTTPS Server] Press Ctrl+C to stop.", "INFO")
 
     def _shutdown(sig, frame):
-        print("\n[HTTPS Server] Shutting down...")
+        rich_output.print_message("\n[HTTPS Server] Shutting down...", "INFO")
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGINT, _shutdown)
@@ -335,12 +344,16 @@ def main() -> None:
         server.serve_forever()
     finally:
         # Clean up temp cert files
-        if temp_cert and temp_cert.exists():
-            temp_cert.unlink()
-        if temp_key and temp_key.exists():
-            temp_key.unlink()
+        if temp_cert:
+            temp_cert_path = Path(temp_cert)
+            if temp_cert_path.exists():
+                temp_cert_path.unlink()
+        if temp_key:
+            temp_key_path = Path(temp_key)
+            if temp_key_path.exists():
+                temp_key_path.unlink()
 
-    print("[HTTPS Server] Stopped.")
+    rich_output.print_message("[HTTPS Server] Stopped.", "INFO")
 
 
 if __name__ == "__main__":
