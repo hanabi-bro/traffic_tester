@@ -299,6 +299,8 @@ def parse_args() -> argparse.Namespace:
                    help="Transfer direction: download=server sends to client, upload=server receives")
     p.add_argument("--threshold", type=int, default=1000,
                    help="Data transfer rate threshold for warnings (bytes/sec)")
+    p.add_argument("--table-format", action="store_true",
+                   help="Use table format for console output instead of CSV")
     return p.parse_args()
 
 
@@ -306,7 +308,7 @@ def main() -> None:
     args = parse_args()
 
     # Initialize rich output handler
-    rich_output = RichTrafficOutput(threshold=args.threshold)
+    rich_output = RichTrafficOutput(threshold=args.threshold, use_table_format=args.table_format)
 
     # Populate module-level config (shared with handler)
     _config.update({

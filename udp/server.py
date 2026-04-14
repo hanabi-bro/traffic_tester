@@ -32,6 +32,7 @@ from common.logger import (
     EVENT_LOSS, EVENT_OUT_OF_ORDER, EVENT_LATE_ARRIVAL,
     TrafficLogger,
 )
+from common.rich_output import RichTrafficOutput
 from common.stats import StatsTracker
 from udp.frame import (
     SYN, SYNACK, DATA, FIN, FINACK,
@@ -70,12 +71,16 @@ class UDPServer:
         logdir: Path,
         timeout_sec: float,
         interval: float,
+        threshold: int = 1000,
+        table_format: bool = False,
     ) -> None:
         self.bind_addr = bind_addr
         self.port = port
         self.logdir = logdir
         self.timeout_sec = timeout_sec
         self.interval = interval
+        self.threshold = threshold
+        self.table_format = table_format
         
         # Session management
         self.sessions: Dict[bytes, SessionState] = {}
@@ -95,6 +100,9 @@ class UDPServer:
         print(f"[UDP Server] Listening on {self.bind_addr}:{self.port}  "
               f"timeout={self.timeout_sec}s  interval={self.interval}s")
         print("[UDP Server] Press Ctrl+C to stop.")
+        
+        # Initialize rich output handler
+        rich_output = RichTrafficOutput(threshold=self.threshold, use_table_format=self.table_format)
         
         # Start background threads
         timeout_thread = threading.Thread(target=self._timeout_monitor, daemon=True)
@@ -424,6 +432,10 @@ def parse_args() -> argparse.Namespace:
                    help="Stats log interval (seconds)")
     p.add_argument("--logdir", type=Path, default=Path("./log_traffic"),
                    help="Log output directory")
+    p.add_argument("--threshold", type=int, default=1000,
+                   help="Data transfer rate threshold for warnings (bytes/sec)")
+    p.add_argument("--table-format", action="store_true",
+                   help="Use table format for console output instead of CSV")
     return p.parse_args()
 
 
@@ -436,6 +448,8 @@ def main() -> None:
         logdir=args.logdir,
         timeout_sec=args.timeout_sec,
         interval=args.interval,
+        threshold=args.threshold,
+        table_format=args.table_format,
     )
     
     def _shutdown(sig=None, frame=None):

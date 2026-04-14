@@ -359,12 +359,14 @@ def parse_args() -> argparse.Namespace:
                    help="Log output directory")
     p.add_argument("--threshold", type=int, default=1000,
                    help="Data transfer rate threshold for warnings (bytes/sec)")
+    p.add_argument("--table-format", action="store_true",
+                   help="Use table format for console output instead of CSV")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    rich_output = RichTrafficOutput(threshold=args.threshold)
+    rich_output = RichTrafficOutput(threshold=args.threshold, use_table_format=args.table_format)
     rich_output.print_message(f"[TCP Client] Connecting to {args.host}:{args.port}  mode={args.mode}  "
           f"duration={args.duration}s  interval={args.interval}s  blocksize={args.blocksize}B", "INFO")
     rich_output.print_message("[TCP Client] Press Ctrl+C to stop.", "INFO")

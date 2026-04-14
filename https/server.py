@@ -286,8 +286,12 @@ def parse_args() -> argparse.Namespace:
                    help="PEM private key file path (auto-generated if omitted)")
     p.add_argument("--logdir", type=Path, default=Path("./log_traffic"),
                    help="Log output directory")
+    p.add_argument("--mode", choices=["download", "upload", "both"], default="download",
+                   help="Transfer direction: download=server sends to client, upload=server receives")
     p.add_argument("--threshold", type=int, default=1000,
                    help="Data transfer rate threshold for warnings (bytes/sec)")
+    p.add_argument("--table-format", action="store_true",
+                   help="Use table format for console output instead of CSV")
     return p.parse_args()
 
 
@@ -295,7 +299,7 @@ def main() -> None:
     args = parse_args()
 
     # Initialize rich output handler
-    rich_output = RichTrafficOutput(threshold=args.threshold)
+    rich_output = RichTrafficOutput(threshold=args.threshold, use_table_format=args.table_format)
 
     # Certificate setup
     temp_cert: Path | None = None
@@ -321,6 +325,7 @@ def main() -> None:
         "timeout_sec": args.timeout_sec,
         "interval": args.interval,
         "blocksize": args.blocksize,
+        "mode": args.mode,
         "rich_output": rich_output,
     })
 
