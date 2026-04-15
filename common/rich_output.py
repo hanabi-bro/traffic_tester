@@ -208,6 +208,8 @@ class TableTrafficOutput:
             row: Dictionary containing CSV field values
         """
         formatted_row, style = self.format_table_row(row)
+        # Debug: print the formatted row to see what's happening
+        # self.console.print(f"DEBUG: {formatted_row}", style="yellow")
         self.console.print(formatted_row, style=style)
     
     def print_message(self, message: str, event_type: str = "INFO") -> None:

@@ -102,7 +102,7 @@ class UDPServer:
         print("[UDP Server] Press Ctrl+C to stop.")
         
         # Initialize rich output handler
-        rich_output = RichTrafficOutput(threshold=self.threshold, use_table_format=self.table_format)
+        rich_output = RichTrafficOutput(threshold=self.threshold, use_table_format=not self.table_format)
         
         # Start background threads
         timeout_thread = threading.Thread(target=self._timeout_monitor, daemon=True)
@@ -434,8 +434,8 @@ def parse_args() -> argparse.Namespace:
                    help="Log output directory")
     p.add_argument("--threshold", type=int, default=1000,
                    help="Data transfer rate threshold for warnings (bytes/sec)")
-    p.add_argument("--table-format", action="store_true",
-                   help="Use table format for console output instead of CSV")
+    p.add_argument("--csv", action="store_true",
+                   help="Use CSV format for console output (default: table format)")
     return p.parse_args()
 
 

@@ -301,7 +301,7 @@ def run_upload(
 
 def run_client(args: argparse.Namespace) -> None:
     # Initialize rich output handler
-    rich_output = RichTrafficOutput(threshold=args.threshold, use_table_format=args.table_format)
+    rich_output = RichTrafficOutput(threshold=args.threshold, use_table_format=not args.csv)
     
     server_ip = resolve_host(args.host)
     server_port: int = args.port
@@ -426,15 +426,15 @@ def parse_args() -> argparse.Namespace:
                    help="Log output directory")
     p.add_argument("--threshold", type=int, default=1000,
                    help="Data transfer rate threshold for warnings (bytes/sec)")
-    p.add_argument("--table-format", action="store_true",
-                   help="Use table format for console output instead of CSV")
+    p.add_argument("--csv", action="store_true",
+                   help="Use CSV format for console output (default: table format)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     verify_str = "on" if args.verify else "off"
-    rich_output = RichTrafficOutput(threshold=args.threshold, use_table_format=args.table_format)
+    rich_output = RichTrafficOutput(threshold=args.threshold, use_table_format=not args.csv)
     rich_output.print_message(f"[HTTPS Client] Connecting to {args.host}:{args.port}  mode={args.mode}  "
           f"duration={args.duration}s  interval={args.interval}s  blocksize={args.blocksize}B  "
           f"verify={verify_str}", "INFO")

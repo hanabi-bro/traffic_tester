@@ -174,7 +174,7 @@ def run_client(args: argparse.Namespace) -> None:
     client_ip = get_source_ip(server_ip, server_port)
 
     # Initialize rich output handler
-    rich_output = RichTrafficOutput(threshold=args.threshold)
+    rich_output = RichTrafficOutput(threshold=args.threshold, use_table_format=not args.csv)
 
     # Create resilient socket with automatic reconnection
     server_info = (server_ip, server_port)
@@ -359,14 +359,14 @@ def parse_args() -> argparse.Namespace:
                    help="Log output directory")
     p.add_argument("--threshold", type=int, default=1000,
                    help="Data transfer rate threshold for warnings (bytes/sec)")
-    p.add_argument("--table-format", action="store_true",
-                   help="Use table format for console output instead of CSV")
+    p.add_argument("--csv", action="store_true",
+                   help="Use CSV format for console output (default: table format)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    rich_output = RichTrafficOutput(threshold=args.threshold, use_table_format=args.table_format)
+    rich_output = RichTrafficOutput(threshold=args.threshold, use_table_format=not args.csv)
     rich_output.print_message(f"[TCP Client] Connecting to {args.host}:{args.port}  mode={args.mode}  "
           f"duration={args.duration}s  interval={args.interval}s  blocksize={args.blocksize}B", "INFO")
     rich_output.print_message("[TCP Client] Press Ctrl+C to stop.", "INFO")
