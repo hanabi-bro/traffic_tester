@@ -5,7 +5,8 @@ Usage:
     python client.py <host> <port> [options]
 
 Options:
-    --timeout SEC     Connection/read timeout in seconds (default: 30)
+    --handshake-timeout SEC  Handshake timeout in seconds (default: 30)
+    --data-timeout SEC       Data transfer timeout in seconds (default: 1)
     --interval SEC    Stats log interval in seconds (default: 1)
     --duration SEC    Run duration in seconds, 0=unlimited (default: 0)
     --blocksize N     Read/send block size in bytes (default: 65536)
@@ -39,7 +40,7 @@ PROTO = "HTTP"
 
 
 
-def _drain_and_close(conn: http.client.HTTPConnection, resp, drain_timeout: float = 2.0) -> None:
+def _drain_and_close(conn: http.client.HTTPConnection, resp, drain_timeout: float = 30.0) -> None:
     """
     Gracefully close a download connection (FIN instead of RST).
 
@@ -84,10 +85,10 @@ def _drain_and_close(conn: http.client.HTTPConnection, resp, drain_timeout: floa
     conn.close()
 
 
-def _make_connection(server_ip: str, server_port: int, timeout: float) -> http.client.HTTPConnection:
+def _make_connection(server_ip: str, server_port: int, handshake_timeout: float, data_timeout: float) -> http.client.HTTPConnection:
     """Create HTTP connection with enhanced socket options."""
     import socket
-    conn = http.client.HTTPConnection(server_ip, server_port, timeout=timeout)
+    conn = http.client.HTTPConnection(server_ip, server_port, timeout=handshake_timeout)
     
     # Apply socket options after connection is established
     def connect_with_opts():
@@ -95,6 +96,8 @@ def _make_connection(server_ip: str, server_port: int, timeout: float) -> http.c
         def enhanced_connect():
             original_connect()
             if conn.sock:
+                # After connection is established, switch to data transfer timeout
+                conn.sock.settimeout(data_timeout)
                 # TCP keepalive settings
                 conn.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
                 try:
@@ -123,7 +126,7 @@ def _make_resilient_request(
     """Make HTTP request with automatic retry on connection failure."""
     for attempt in range(max_retries + 1):
         try:
-            conn = _make_connection(server_ip, server_port, args.timeout_sec)
+            conn = _make_connection(server_ip, server_port, args.handshake_timeout_sec, args.data_timeout_sec)
             conn.request(method, url)
             resp = conn.getresponse()
             
@@ -219,7 +222,7 @@ def run_download(
         msg = str(e)
     finally:
         # Graceful close: FIN handshake instead of RST
-        _drain_and_close(conn, resp)
+        _drain_and_close(conn, resp, args.handshake_timeout_sec)
 
     return event_type, msg
 
@@ -240,7 +243,7 @@ def run_upload(
     reader = DummyReader(args.blocksize)
     deadline = (time.monotonic() + args.duration) if args.duration > 0 else None
 
-    conn = _make_connection(server_ip, server_port, args.timeout_sec)
+    conn = _make_connection(server_ip, server_port, args.handshake_timeout_sec, args.data_timeout_sec)
     _chunked_open = False   # True once endheaders() succeeds
     event_type = EVENT_DISCONNECT
     msg = "Upload ended"
@@ -283,7 +286,7 @@ def run_upload(
             # instead of seeing an abrupt RST.
             try:
                 conn.send(b"0\r\n\r\n")
-                conn.sock.settimeout(2.0)
+                conn.sock.settimeout(args.handshake_timeout_sec)
                 resp = conn.getresponse()
                 if event_type == EVENT_DISCONNECT:
                     msg = f"Upload ended (HTTP {resp.status})"
@@ -408,8 +411,10 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("host", help="Server hostname or IP address")
     p.add_argument("port", type=int, help="Server port")
-    p.add_argument("--timeout", type=float, default=30.0, dest="timeout_sec",
-                   help="Connection/read timeout (seconds)")
+    p.add_argument("--handshake-timeout", type=float, default=30.0, dest="handshake_timeout_sec",
+                   help="Handshake timeout (seconds)")
+    p.add_argument("--data-timeout", type=float, default=1.0, dest="data_timeout_sec",
+                   help="Data transfer timeout (seconds)")
     p.add_argument("--interval", type=float, default=1.0,
                    help="Stats log interval (seconds)")
     p.add_argument("--duration", type=float, default=0.0,

@@ -5,7 +5,8 @@ Usage:
     python client.py <host> <port> [options]
 
 Options:
-    --timeout SEC     Connection/idle timeout in seconds (default: 30)
+    --handshake-timeout SEC  Handshake timeout in seconds (default: 30)
+    --data-timeout SEC       Data transfer timeout in seconds (default: 1)
     --interval SEC    Stats log interval in seconds (default: 1)
     --duration SEC    Run duration in seconds, 0=unlimited (default: 0)
     --blocksize N     Send block size in bytes (default: 65536)
@@ -41,9 +42,10 @@ PROTO = "TCP"
 class ResilientSocket:
     """Socket wrapper with automatic reconnection capability."""
     
-    def __init__(self, server_info: tuple[str, int], timeout: float = 30.0, rich_output=None):
+    def __init__(self, server_info: tuple[str, int], handshake_timeout: float = 30.0, data_timeout: float = 1.0, rich_output=None):
         self.server_info = server_info
-        self.timeout = timeout
+        self.handshake_timeout = handshake_timeout
+        self.data_timeout = data_timeout
         self.rich_output = rich_output
         self._sock = self._create_socket()
         self._lock = threading.Lock()
@@ -51,7 +53,7 @@ class ResilientSocket:
     def _create_socket(self) -> socket.socket:
         """Create a new socket with all optimal settings."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout)
+        sock.settimeout(self.handshake_timeout)
         tcp_no_delay(sock)
         
         # TCP keepalive settings
@@ -66,6 +68,8 @@ class ResilientSocket:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
         
         sock.connect(self.server_info)
+        # After connection is established, switch to data transfer timeout
+        sock.settimeout(self.data_timeout)
         return sock
     
     def _reconnect(self) -> bool:
@@ -179,7 +183,7 @@ def run_client(args: argparse.Namespace) -> None:
     # Create resilient socket with automatic reconnection
     server_info = (server_ip, server_port)
     try:
-        sock = ResilientSocket(server_info, timeout=args.timeout_sec, rich_output=rich_output)
+        sock = ResilientSocket(server_info, handshake_timeout=args.handshake_timeout_sec, data_timeout=args.data_timeout_sec, rich_output=rich_output)
     except (TimeoutError, OSError) as e:
         if rich_output:
             rich_output.print_message(f"[TCP Client] Connection failed: {e}", "ERROR")
@@ -345,8 +349,10 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("host", help="Server hostname or IP address")
     p.add_argument("port", type=int, help="Server port")
-    p.add_argument("--timeout", type=float, default=30.0, dest="timeout_sec",
-                   help="Connection/idle timeout (seconds)")
+    p.add_argument("--handshake-timeout", type=float, default=30.0, dest="handshake_timeout_sec",
+                   help="Handshake timeout (seconds)")
+    p.add_argument("--data-timeout", type=float, default=1.0, dest="data_timeout_sec",
+                   help="Data transfer timeout (seconds)")
     p.add_argument("--interval", type=float, default=1.0,
                    help="Stats log interval (seconds)")
     p.add_argument("--duration", type=float, default=0.0,
